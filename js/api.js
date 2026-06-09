@@ -242,6 +242,22 @@ export async function runTasksDualApi(api1, api2, tasks, onProgress) {
     return { results, errors };
 }
 
+/** 拉取这个接口支持的模型列表（OpenAI 兼容的 GET /models） */
+export async function fetchModels(cfg) {
+    if (!cfg || !cfg.baseUrl || !cfg.apiKey) throw new Error('先把接口地址和 API Key 填好再拉取');
+    const url = `${normalizeBaseUrl(cfg.baseUrl)}/models`;
+    const data = await safeFetchJson(url, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${cfg.apiKey}` },
+    }, 1, 20000);
+    const list = Array.isArray(data) ? data : (data.data || data.models || []);
+    const ids = list
+        .map(m => (typeof m === 'string' ? m : (m.id || m.model || m.name)))
+        .filter(Boolean);
+    if (!ids.length) throw new Error('这个接口没返回模型列表（也可能不支持拉取，手动填模型名即可）');
+    return [...new Set(ids)].sort();
+}
+
 /** 测试某个 API 配置能不能用 */
 export async function testApi(cfg) {
     const text = await chatOnce(cfg, [

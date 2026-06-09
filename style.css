@@ -196,6 +196,19 @@ body { display: flex; flex-direction: column; }
   color: var(--ink-soft); font-size: 12px; padding: 2px;
 }
 .msg.typing { color: var(--ink-soft); font-style: italic; }
+.msg.b { background: #eef3f9; border-color: #ccd9e8; }
+.msg-name { font-size: 11px; color: var(--ink-soft); margin: 0 0 3px 2px; align-self: flex-start; }
+.msg-group { display: flex; flex-direction: column; align-self: flex-start; max-width: 78%; }
+.msg-group .msg { max-width: 100%; }
+
+.primary-btn.alt { background: #4a6fa5; }
+
+.model-row { display: flex; gap: 8px; }
+.model-row input { flex: 1; }
+.model-select {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  font-size: 13.5px; background: var(--bg); outline: none; color: var(--ink);
+}
 
 .chat-composer {
   display: flex; gap: 10px; padding: 12px 12%;

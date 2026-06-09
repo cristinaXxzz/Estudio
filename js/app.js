@@ -3,11 +3,14 @@
  */
 
 import * as db from './db.js';
-import { chatWithFallback, chatForJudge, testApi, extractJson, isApiConfigured } from './api.js';
+import { chatWithFallback, chatForJudge, chatOnce, testApi, fetchModels, extractJson, isApiConfigured } from './api.js';
 import { ghBackup, ghRestore } from './github.js';
 import { fileToText, extractPoints } from './extract.js';
 import { pickSessionPoints, applyReview, subjectStats, isDue } from './scheduler.js';
-import { buildSystemPrompt, buildJudgePrompt, OPENING_TRIGGER, CLOSING_TRIGGER } from './prompts.js';
+import {
+    buildSystemPrompt, buildJudgePrompt, OPENING_TRIGGER, CLOSING_TRIGGER,
+    buildGroupSystemPrompt, GROUP_PERSONAS, GROUP_OPENING_A, GROUP_OPENING_B, GROUP_CLOSING,
+} from './prompts.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,7 +18,8 @@ const state = {
     subjects: [],
     currentSubjectId: null,
     settings: { api1: null, api2: null, github: null },
-    session: null, // 进行中的复习：{id, subject, points, apiMessages, touched, startedAt, busy}
+    modelLists: { 1: [], 2: [] }, // 各接口拉取到的模型列表
+    session: null, // 进行中的复习：{id, mode:'solo'|'group', subject, points, apiMessages|history, touched, startedAt, busy}
 };
 
 // ================= 小工具 =================
@@ -50,6 +54,49 @@ async function loadSettings() {
     state.settings.api1 = await db.getSetting('api1');
     state.settings.api2 = await db.getSetting('api2');
     state.settings.github = await db.getSetting('github');
+    state.modelLists[1] = (await db.getSetting('modelList1')) || [];
+    state.modelLists[2] = (await db.getSetting('modelList2')) || [];
+}
+
+/** 把拉取到的模型列表灌进下拉框 */
+function populateModelSelect(which) {
+    const sel = $(`api${which}ModelSelect`);
+    const list = state.modelLists[which];
+    sel.innerHTML = '';
+    if (!list.length) { sel.hidden = true; return; }
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = `↓ 从拉取到的 ${list.length} 个模型里选`;
+    sel.appendChild(ph);
+    for (const id of list) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = id;
+        sel.appendChild(opt);
+    }
+    const current = $(`api${which}Model`).value.trim();
+    sel.value = list.includes(current) ? current : '';
+    sel.hidden = false;
+}
+
+async function fetchModelsSlot(which) {
+    const s = readSettingsForm();
+    const cfg = which === 1 ? s.api1 : s.api2;
+    const btn = $(`btnFetchModels${which}`);
+    btn.disabled = true;
+    btn.textContent = '拉取中…';
+    try {
+        const ids = await fetchModels(cfg);
+        state.modelLists[which] = ids;
+        await db.setSetting(`modelList${which}`, ids);
+        populateModelSelect(which);
+        toast(`接口 ${which} 拉到 ${ids.length} 个模型，从下拉框里选一个`, 'ok');
+    } catch (e) {
+        toast(`拉取模型失败：${e.message}`, 'err');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '拉取模型';
+    }
 }
 
 function fillSettingsForm() {
@@ -64,6 +111,8 @@ function fillSettingsForm() {
     $('ghRepo').value = (github && github.repo) || '';
     $('ghUseProxy').checked = !github || github.useProxy !== false;
     $('ghAutoBackup').checked = !github || github.autoBackup !== false;
+    populateModelSelect(1);
+    populateModelSelect(2);
 }
 
 function readSettingsForm() {
@@ -187,6 +236,7 @@ async function renderSubjectView() {
         ? `共 ${st.total} 个知识点 · ${st.due} 个待复习 · 平均掌握度 ${st.avgMastery.toFixed(1)}/5`
         : '还没有知识点，先上传点资料吧';
     $('btnStartReview').disabled = points.length === 0;
+    $('btnStartGroup').disabled = points.length === 0;
 
     // 资料列表
     const fl = $('fileList');
@@ -321,14 +371,24 @@ async function handleFiles(fileList) {
 
 // ================= 复习对话 =================
 
-function addMsg(role, content) {
+function addMsg(role, content, name) {
     const box = $('chatMessages');
     const el = document.createElement('div');
     el.className = 'msg ' + role;
     el.textContent = content;
-    box.appendChild(el);
+    let outer = el;
+    if (name) {
+        outer = document.createElement('div');
+        outer.className = 'msg-group';
+        const label = document.createElement('div');
+        label.className = 'msg-name';
+        label.textContent = name;
+        outer.appendChild(label);
+        outer.appendChild(el);
+    }
+    box.appendChild(outer);
     box.scrollTop = box.scrollHeight;
-    return el;
+    return outer;
 }
 
 async function startReview() {
@@ -348,6 +408,7 @@ async function startReview() {
 
     state.session = {
         id: db.uid(),
+        mode: 'solo',
         subject: sub,
         points: picked,
         apiMessages: [
@@ -380,6 +441,100 @@ async function startReview() {
     }
 }
 
+// ---------- 三人群聊模式 ----------
+
+/** 把群聊历史翻译成某个 AI 视角下的对话：自己的话是 assistant，其他人的话带名字拼成 user */
+function groupMessagesFor(sess, key, extraTrigger) {
+    const msgs = [{
+        role: 'system',
+        content: buildGroupSystemPrompt(sess.subject, sess.points, sess.lastSummary, key),
+    }];
+    let buf = [];
+    for (const m of sess.history) {
+        if (m.speaker === key) {
+            if (buf.length) { msgs.push({ role: 'user', content: buf.join('\n') }); buf = []; }
+            msgs.push({ role: 'assistant', content: m.content });
+        } else {
+            const label = m.speaker === 'user' ? '用户' : GROUP_PERSONAS[m.speaker].name;
+            buf.push(label + ': ' + m.content);
+        }
+    }
+    if (extraTrigger) buf.push(extraTrigger);
+    if (buf.length) msgs.push({ role: 'user', content: buf.join('\n') });
+    return msgs;
+}
+
+/** 让某个 AI 同学说一句。A 走接口1、B 走接口2，挂了互相兜底。说"[跳过]"就不出声。 */
+async function personaReply(sess, key, trigger) {
+    const { api1, api2 } = state.settings;
+    const [pref, alt] = key === 'A' ? [api1, api2] : [api2, api1];
+    const name = GROUP_PERSONAS[key].name;
+    const messages = groupMessagesFor(sess, key, trigger);
+    const typing = addMsg(key === 'B' ? 'ai b typing' : 'ai typing', '…', name);
+    try {
+        let text;
+        try {
+            text = await chatOnce(pref, messages);
+        } catch (e) {
+            if (!isApiConfigured(alt)) throw e;
+            console.warn(`[群聊] ${name} 的接口失败，换另一个兜底:`, e.message);
+            text = await chatOnce(alt, messages);
+        }
+        typing.remove();
+        if (state.session !== sess) return null; // 用户已经退出了
+        if (/^\s*[\[（(]?\s*跳过\s*[\]）)]?\s*$/.test(text)) return null;
+        sess.history.push({ speaker: key, content: text });
+        addMsg(key === 'B' ? 'ai b' : 'ai', text, name);
+        return text;
+    } catch (e) {
+        typing.remove();
+        if (state.session === sess) addMsg('sys', `${name} 掉线了：${e.message}`);
+        return null;
+    }
+}
+
+async function startGroupReview() {
+    const sub = state.subjects.find(s => s.id === state.currentSubjectId);
+    if (!sub) return;
+    const { api1, api2 } = state.settings;
+    if (!isApiConfigured(api1) || !isApiConfigured(api2)) {
+        toast('三人群聊需要两个接口都配置好（设置里把接口 2 也填上）', 'err');
+        return;
+    }
+    const allPoints = await db.getByIndex('points', 'bySubject', sub.id);
+    if (!allPoints.length) { toast('这个科目还没有知识点', 'err'); return; }
+
+    const picked = pickSessionPoints(allPoints, 8);
+    const sessions = await db.getByIndex('sessions', 'bySubject', sub.id);
+    const last = sessions.sort((a, b) => b.startedAt - a.startedAt)[0];
+
+    state.session = {
+        id: db.uid(),
+        mode: 'group',
+        subject: sub,
+        points: picked,
+        history: [],            // [{speaker:'user'|'A'|'B', content}]
+        lastSummary: last && last.summary,
+        touched: {},
+        turns: 0,
+        startedAt: Date.now(),
+        busy: false,
+    };
+
+    $('chatSubjectName').textContent = sub.name + ' · 群聊';
+    $('chatApiBadge').textContent = `${GROUP_PERSONAS.A.name}=接口1 · ${GROUP_PERSONAS.B.name}=接口2`;
+    $('chatMessages').innerHTML = '';
+    showView('viewChat');
+    $('chatInput').value = '';
+
+    const sess = state.session;
+    sess.busy = true;
+    await personaReply(sess, 'A', GROUP_OPENING_A);
+    if (state.session === sess) await personaReply(sess, 'B', GROUP_OPENING_B);
+    sess.busy = false;
+    $('chatInput').focus();
+}
+
 async function sendMessage() {
     const sess = state.session;
     if (!sess || sess.busy) return;
@@ -391,6 +546,22 @@ async function sendMessage() {
 
     sess.busy = true;
     sess.turns++;
+
+    if (sess.mode === 'group') {
+        sess.history.push({ speaker: 'user', content: text });
+        addMsg('me', text);
+        judgeInBackground(sess);
+        // 谁先接话轮流来，群聊更活
+        const order = sess.turns % 2 === 1 ? ['A', 'B'] : ['B', 'A'];
+        for (const key of order) {
+            if (state.session !== sess) break;
+            await personaReply(sess, key);
+        }
+        sess.busy = false;
+        input.focus();
+        return;
+    }
+
     sess.apiMessages.push({ role: 'user', content: text });
     addMsg('me', text);
 
@@ -421,9 +592,14 @@ async function judgeInBackground(sess) {
     try {
         const { api1, api2 } = state.settings;
         // 取最近 6 条可见对话（跳过 system 和触发语）
-        const recent = sess.apiMessages
-            .filter(m => m.role !== 'system' && m.content !== OPENING_TRIGGER && m.content !== CLOSING_TRIGGER)
-            .slice(-6);
+        const recent = sess.mode === 'group'
+            ? sess.history.slice(-6).map(m => ({
+                role: m.speaker === 'user' ? 'user' : 'assistant',
+                content: m.speaker === 'user' ? m.content : `${GROUP_PERSONAS[m.speaker].name}: ${m.content}`,
+            }))
+            : sess.apiMessages
+                .filter(m => m.role !== 'system' && m.content !== OPENING_TRIGGER && m.content !== CLOSING_TRIGGER)
+                .slice(-6);
         if (recent.length < 2 || recent[recent.length - 1].role !== 'user') return;
 
         const reply = await chatForJudge(api1, api2, [
@@ -457,16 +633,20 @@ async function endSession(silent = false) {
 
     if (!silent && sess.turns > 0) {
         $('btnEndSession').disabled = true;
-        const typing = addMsg('ai typing', '…');
-        try {
-            const { api1, api2 } = state.settings;
-            sess.apiMessages.push({ role: 'user', content: CLOSING_TRIGGER });
-            const { text } = await chatWithFallback(api1, api2, sess.apiMessages);
-            typing.remove();
-            addMsg('ai', text);
-            summary = text;
-        } catch (e) {
-            typing.remove();
+        if (sess.mode === 'group') {
+            summary = (await personaReply(sess, 'A', GROUP_CLOSING)) || '';
+        } else {
+            const typing = addMsg('ai typing', '…');
+            try {
+                const { api1, api2 } = state.settings;
+                sess.apiMessages.push({ role: 'user', content: CLOSING_TRIGGER });
+                const { text } = await chatWithFallback(api1, api2, sess.apiMessages);
+                typing.remove();
+                addMsg('ai', text);
+                summary = text;
+            } catch (e) {
+                typing.remove();
+            }
         }
         $('btnEndSession').disabled = false;
     }
@@ -576,6 +756,11 @@ function bindEvents() {
     $('btnBackupNow').onclick = async () => { await saveSettingsQuiet(); backupNow(); };
     $('btnRestore').onclick = restoreFromCloud;
     $('btnStartReview').onclick = startReview;
+    $('btnStartGroup').onclick = startGroupReview;
+    $('btnFetchModels1').onclick = () => fetchModelsSlot(1);
+    $('btnFetchModels2').onclick = () => fetchModelsSlot(2);
+    $('api1ModelSelect').onchange = (e) => { if (e.target.value) $('api1Model').value = e.target.value; };
+    $('api2ModelSelect').onchange = (e) => { if (e.target.value) $('api2Model').value = e.target.value; };
     $('btnSend').onclick = sendMessage;
     $('btnEndSession').onclick = () => endSession(false);
     $('btnChatBack').onclick = () => {

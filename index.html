@@ -51,7 +51,10 @@
           <h1 id="subjectTitle"></h1>
           <p id="subjectStats" class="subject-stats"></p>
         </div>
-        <button id="btnStartReview" class="primary-btn big">💬 开始复习</button>
+        <div class="btn-row">
+          <button id="btnStartReview" class="primary-btn big">💬 开始复习</button>
+          <button id="btnStartGroup" class="primary-btn big alt" title="接口1和接口2各扮演一个同学，三个人一起聊">👥 三人群聊</button>
+        </div>
       </div>
 
       <div class="panel">
@@ -117,7 +120,11 @@
       <div class="form-grid">
         <input id="api1BaseUrl" placeholder="接口地址，例如 https://api.xxx.com/v1">
         <input id="api1Key" type="password" placeholder="API Key（钥匙）">
-        <input id="api1Model" placeholder="模型名，例如 gpt-4o / claude-fable-5">
+        <div class="model-row">
+          <input id="api1Model" placeholder="模型名（点右边按钮拉取后可下拉选）">
+          <button id="btnFetchModels1" class="mini-btn">拉取模型</button>
+        </div>
+        <select id="api1ModelSelect" class="model-select" hidden></select>
         <button id="btnTestApi1" class="mini-btn">测试接口 1</button>
       </div>
 
@@ -125,7 +132,11 @@
       <div class="form-grid">
         <input id="api2BaseUrl" placeholder="接口地址（可不填）">
         <input id="api2Key" type="password" placeholder="API Key">
-        <input id="api2Model" placeholder="模型名">
+        <div class="model-row">
+          <input id="api2Model" placeholder="模型名（点右边按钮拉取后可下拉选）">
+          <button id="btnFetchModels2" class="mini-btn">拉取模型</button>
+        </div>
+        <select id="api2ModelSelect" class="model-select" hidden></select>
         <button id="btnTestApi2" class="mini-btn">测试接口 2</button>
       </div>
 
