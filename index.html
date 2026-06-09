@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Estudio · 对话式复习</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">📖</span>
+    <span class="brand-name">Estudio</span>
+    <span class="brand-sub">对话式复习</span>
+  </div>
+  <div class="topbar-right">
+    <span id="backupStatus" class="backup-status"></span>
+    <button id="btnSettings" class="icon-btn" title="设置">⚙️ 设置</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- 侧栏：科目 -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <span>科目</span>
+      <button id="btnAddSubject" class="mini-btn">＋ 新科目</button>
+    </div>
+    <ul id="subjectList" class="subject-list"></ul>
+  </aside>
+
+  <!-- 主区域 -->
+  <main class="main">
+
+    <!-- 没选科目时 -->
+    <section id="viewEmpty" class="view">
+      <div class="empty-state">
+        <div class="empty-icon">🌵</div>
+        <p>左边选一个科目，或者点「＋ 新科目」建一个。</p>
+        <p class="hint">建好科目 → 上传资料 → AI 拆成知识点 → 开始边聊边复习。</p>
+      </div>
+    </section>
+
+    <!-- 科目详情 -->
+    <section id="viewSubject" class="view" hidden>
+      <div class="subject-header">
+        <div>
+          <h1 id="subjectTitle"></h1>
+          <p id="subjectStats" class="subject-stats"></p>
+        </div>
+        <button id="btnStartReview" class="primary-btn big">💬 开始复习</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>资料</h2>
+          <label class="mini-btn file-label">
+            ＋ 上传文件
+            <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf,.docx,.doc,.markdown" hidden>
+          </label>
+        </div>
+        <p class="hint">支持 txt / md / pdf / docx。上传后 AI 会自动把内容拆成知识点。</p>
+        <div id="extractProgress" class="progress-row" hidden>
+          <div class="progress-bar"><div id="extractProgressFill" class="progress-fill"></div></div>
+          <span id="extractProgressText"></span>
+        </div>
+        <ul id="fileList" class="file-list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>知识点</h2>
+          <span id="pointCount" class="hint"></span>
+        </div>
+        <ul id="pointList" class="point-list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>复习记录</h2></div>
+        <ul id="sessionList" class="session-list"></ul>
+      </div>
+    </section>
+
+    <!-- 复习对话 -->
+    <section id="viewChat" class="view chat-view" hidden>
+      <div class="chat-header">
+        <button id="btnChatBack" class="icon-btn" title="返回（本次进度已自动保存）">←</button>
+        <div class="chat-title">
+          <strong id="chatSubjectName"></strong>
+          <span id="chatApiBadge" class="api-badge"></span>
+        </div>
+        <button id="btnEndSession" class="end-btn">今天到这 ✓</button>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-composer">
+        <textarea id="chatInput" rows="1" placeholder="用自己的话回答，也可以反问、抬杠、跑题…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button id="btnSend" class="primary-btn">发送</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 设置弹窗 -->
+<div id="settingsModal" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>设置</h2>
+      <button id="btnCloseSettings" class="icon-btn">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <h3>AI 接口 1（主力，聊天用）</h3>
+      <div class="form-grid">
+        <input id="api1BaseUrl" placeholder="接口地址，例如 https://api.xxx.com/v1">
+        <input id="api1Key" type="password" placeholder="API Key（钥匙）">
+        <input id="api1Model" placeholder="模型名，例如 gpt-4o / claude-fable-5">
+        <button id="btnTestApi1" class="mini-btn">测试接口 1</button>
+      </div>
+
+      <h3>AI 接口 2（可选：评分裁判 + 备胎，拆资料时俩接口一起干活）</h3>
+      <div class="form-grid">
+        <input id="api2BaseUrl" placeholder="接口地址（可不填）">
+        <input id="api2Key" type="password" placeholder="API Key">
+        <input id="api2Model" placeholder="模型名">
+        <button id="btnTestApi2" class="mini-btn">测试接口 2</button>
+      </div>
+
+      <h3>GitHub 云备份</h3>
+      <p class="hint">填一个 GitHub Token（钥匙），数据会自动备份到你账号下的一个<strong>私有</strong>仓库。怎么申请 Token 见 README。</p>
+      <div class="form-grid">
+        <input id="ghToken" type="password" placeholder="GitHub Token（ghp_ 或 github_pat_ 开头）">
+        <input id="ghRepo" placeholder="备份仓库名（默认 estudio-backup）">
+        <label class="check-row"><input type="checkbox" id="ghUseProxy" checked> 走中转站连 GitHub（国内勾上，能直连 GitHub 就取消）</label>
+        <label class="check-row"><input type="checkbox" id="ghAutoBackup" checked> 每次复习结束后自动备份</label>
+        <div class="btn-row">
+          <button id="btnBackupNow" class="mini-btn">立即备份 ☁️</button>
+          <button id="btnRestore" class="mini-btn danger">从云端恢复（覆盖本机数据）</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button id="btnSaveSettings" class="primary-btn">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastBox" class="toast-box"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
