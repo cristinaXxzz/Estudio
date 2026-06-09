@@ -9,17 +9,23 @@ import { fileToText, extractPoints } from './extract.js';
 import { pickSessionPoints, applyReview, subjectStats, isDue } from './scheduler.js';
 import {
     buildSystemPrompt, buildJudgePrompt, OPENING_TRIGGER, CLOSING_TRIGGER,
-    buildGroupSystemPrompt, GROUP_PERSONAS, GROUP_OPENING_A, GROUP_OPENING_B, GROUP_CLOSING,
+    buildGroupSystemPrompt, DEFAULT_CHARACTERS,
+    GROUP_OPENING_FIRST, GROUP_OPENING_NEXT, GROUP_CLOSING,
 } from './prompts.js';
+import {
+    ROOMS, digestSession, retrieveMemories, formatMemories, testEmbed, isEmbedConfigured,
+} from './memory.js';
 
 const $ = (id) => document.getElementById(id);
 
 const state = {
     subjects: [],
     currentSubjectId: null,
-    settings: { api1: null, api2: null, github: null },
+    settings: { api1: null, api2: null, github: null, embed: null },
     modelLists: { 1: [], 2: [] }, // 各接口拉取到的模型列表
-    session: null, // 进行中的复习：{id, mode:'solo'|'group', subject, points, apiMessages|history, touched, startedAt, busy}
+    characters: [],               // 可拉进群聊的 AI 角色
+    editingCharId: null,
+    session: null, // 进行中的复习：{id, mode:'solo'|'group', subject, points, apiMessages|history, chars, touched, startedAt, busy}
 };
 
 // ================= 小工具 =================
@@ -54,6 +60,7 @@ async function loadSettings() {
     state.settings.api1 = await db.getSetting('api1');
     state.settings.api2 = await db.getSetting('api2');
     state.settings.github = await db.getSetting('github');
+    state.settings.embed = await db.getSetting('embed');
     state.modelLists[1] = (await db.getSetting('modelList1')) || [];
     state.modelLists[2] = (await db.getSetting('modelList2')) || [];
 }
@@ -107,6 +114,10 @@ function fillSettingsForm() {
     $('api2BaseUrl').value = (api2 && api2.baseUrl) || '';
     $('api2Key').value = (api2 && api2.apiKey) || '';
     $('api2Model').value = (api2 && api2.model) || '';
+    const embed = state.settings.embed;
+    $('embedBaseUrl').value = (embed && embed.baseUrl) || '';
+    $('embedKey').value = (embed && embed.apiKey) || '';
+    $('embedModel').value = (embed && embed.model) || '';
     $('ghToken').value = (github && github.token) || '';
     $('ghRepo').value = (github && github.repo) || '';
     $('ghUseProxy').checked = !github || github.useProxy !== false;
@@ -127,6 +138,11 @@ function readSettingsForm() {
             apiKey: $('api2Key').value.trim(),
             model: $('api2Model').value.trim(),
         },
+        embed: {
+            baseUrl: $('embedBaseUrl').value.trim(),
+            apiKey: $('embedKey').value.trim(),
+            model: $('embedModel').value.trim(),
+        },
         github: {
             token: $('ghToken').value.trim(),
             repo: $('ghRepo').value.trim() || 'estudio-backup',
@@ -140,6 +156,7 @@ async function saveSettings() {
     const s = readSettingsForm();
     await db.setSetting('api1', s.api1);
     await db.setSetting('api2', s.api2);
+    await db.setSetting('embed', s.embed);
     await db.setSetting('github', s.github);
     state.settings = s;
     toast('设置已保存', 'ok');
@@ -225,10 +242,11 @@ async function renderSubjectView() {
     if (!sub) return;
     $('subjectTitle').textContent = sub.name;
 
-    const [files, points, sessions] = await Promise.all([
+    const [files, points, sessions, memories] = await Promise.all([
         db.getByIndex('files', 'bySubject', sub.id),
         db.getByIndex('points', 'bySubject', sub.id),
         db.getByIndex('sessions', 'bySubject', sub.id),
+        db.getByIndex('memories', 'bySubject', sub.id),
     ]);
 
     const st = subjectStats(points);
@@ -293,6 +311,35 @@ async function renderSubjectView() {
         li.appendChild(dots);
         li.appendChild(tag);
         pl.appendChild(li);
+    }
+
+    // 学习记忆
+    const ml = $('memoryList');
+    ml.innerHTML = '';
+    $('memoryCount').textContent = memories.length ? `${memories.length} 条` : '';
+    if (!memories.length) {
+        ml.innerHTML = '<li class="hint">还没有记忆，复习几次它就慢慢了解你了</li>';
+    }
+    for (const m of memories.sort((a, b) => b.createdAt - a.createdAt).slice(0, 30)) {
+        const li = document.createElement('li');
+        const room = ROOMS[m.room] || { emoji: '🗂️', label: m.room };
+        const tag = document.createElement('span');
+        tag.className = 'memory-room';
+        tag.textContent = room.emoji + room.label;
+        const content = document.createElement('span');
+        content.className = 'memory-content';
+        content.textContent = m.content;
+        const vec = document.createElement('span');
+        vec.className = 'memory-vec';
+        vec.textContent = m.vec ? '🧬' : '';
+        vec.title = m.vec ? '已向量化（按意思检索）' : '';
+        const delBtn = document.createElement('button');
+        delBtn.className = 'del-btn';
+        delBtn.textContent = '✕';
+        delBtn.title = '删掉这条记忆';
+        delBtn.onclick = async () => { await db.del('memories', m.id); renderSubjectView(); };
+        li.append(tag, content, vec, delBtn);
+        ml.appendChild(li);
     }
 
     // 复习记录
@@ -405,6 +452,7 @@ async function startReview() {
     const picked = pickSessionPoints(allPoints, 8);
     const sessions = await db.getByIndex('sessions', 'bySubject', sub.id);
     const last = sessions.sort((a, b) => b.startedAt - a.startedAt)[0];
+    const memories = await retrieveMemories(sub, picked, state.settings);
 
     state.session = {
         id: db.uid(),
@@ -412,7 +460,7 @@ async function startReview() {
         subject: sub,
         points: picked,
         apiMessages: [
-            { role: 'system', content: buildSystemPrompt(sub, picked, last && last.summary) },
+            { role: 'system', content: buildSystemPrompt(sub, picked, last && last.summary, formatMemories(memories)) },
             { role: 'user', content: OPENING_TRIGGER },
         ],
         touched: {},        // pointId → { title, before, after }
@@ -441,21 +489,155 @@ async function startReview() {
     }
 }
 
-// ---------- 三人群聊模式 ----------
+// ================= AI 角色（可创建、可拉群） =================
 
-/** 把群聊历史翻译成某个 AI 视角下的对话：自己的话是 assistant，其他人的话带名字拼成 user */
-function groupMessagesFor(sess, key, extraTrigger) {
+async function loadCharacters() {
+    state.characters = (await db.getAll('characters')).sort((a, b) => a.createdAt - b.createdAt);
+    // 首次使用：把内置的小言/老杠种进角色库
+    if (!state.characters.length) {
+        for (const c of DEFAULT_CHARACTERS) {
+            await db.put('characters', { id: db.uid(), ...c, createdAt: Date.now() });
+        }
+        state.characters = (await db.getAll('characters')).sort((a, b) => a.createdAt - b.createdAt);
+    }
+}
+
+function renderCharList() {
+    const ul = $('charList');
+    ul.innerHTML = '';
+    for (const c of state.characters) {
+        const li = document.createElement('li');
+        const emoji = document.createElement('span');
+        emoji.className = 'char-emoji';
+        emoji.textContent = c.emoji || '🙂';
+        const info = document.createElement('div');
+        info.className = 'char-info';
+        const nm = document.createElement('strong');
+        nm.textContent = c.name;
+        const desc = document.createElement('span');
+        desc.textContent = c.persona;
+        desc.title = c.persona;
+        info.appendChild(nm); info.appendChild(desc);
+        const slot = document.createElement('span');
+        slot.className = 'char-slot';
+        slot.textContent = `接口${c.apiSlot}`;
+        const editBtn = document.createElement('button');
+        editBtn.className = 'mini-btn';
+        editBtn.textContent = '编辑';
+        editBtn.onclick = () => openCharEditor(c);
+        const delBtn = document.createElement('button');
+        delBtn.className = 'del-btn';
+        delBtn.textContent = '✕';
+        delBtn.title = '删除角色';
+        delBtn.onclick = async () => {
+            if (!confirm(`删除角色「${c.name}」？`)) return;
+            await db.del('characters', c.id);
+            await loadCharacters();
+            renderCharList();
+        };
+        li.append(emoji, info, slot, editBtn, delBtn);
+        ul.appendChild(li);
+    }
+}
+
+function openCharEditor(c) {
+    state.editingCharId = c ? c.id : null;
+    $('charEditorTitle').textContent = c ? `编辑：${c.name}` : '新角色';
+    $('charEmoji').value = c ? (c.emoji || '') : '';
+    $('charName').value = c ? c.name : '';
+    $('charPersona').value = c ? c.persona : '';
+    $('charApiSlot').value = c ? String(c.apiSlot) : '1';
+    $('charEditor').hidden = false;
+}
+
+async function saveCharacter() {
+    const name = $('charName').value.trim();
+    const persona = $('charPersona').value.trim();
+    if (!name) { toast('角色得有个名字', 'err'); return; }
+    if (!persona) { toast('人设不能空着——它怎么说话全靠这个', 'err'); return; }
+    const existing = state.editingCharId
+        ? state.characters.find(c => c.id === state.editingCharId)
+        : null;
+    await db.put('characters', {
+        id: existing ? existing.id : db.uid(),
+        name,
+        emoji: $('charEmoji').value.trim() || '🙂',
+        persona,
+        apiSlot: parseInt($('charApiSlot').value, 10) === 2 ? 2 : 1,
+        createdAt: existing ? existing.createdAt : Date.now(),
+    });
+    $('charEditor').hidden = true;
+    state.editingCharId = null;
+    await loadCharacters();
+    renderCharList();
+    toast('角色已保存', 'ok');
+}
+
+// ================= 群聊（自选角色 + 记忆） =================
+
+const groupPick = new Set(); // 选人弹窗里勾选的角色 id
+
+function openGroupPicker() {
+    const sub = state.subjects.find(s => s.id === state.currentSubjectId);
+    if (!sub) return;
+    const { api1, api2 } = state.settings;
+    if (!isApiConfigured(api1) && !isApiConfigured(api2)) {
+        toast('先去 ⚙️ 设置里把 AI 接口填好', 'err');
+        return;
+    }
+    groupPick.clear();
+    const ul = $('groupPickList');
+    ul.innerHTML = '';
+    for (const c of state.characters) {
+        const li = document.createElement('li');
+        const mark = document.createElement('span');
+        mark.className = 'pick-mark';
+        mark.textContent = '○';
+        const emoji = document.createElement('span');
+        emoji.className = 'char-emoji';
+        emoji.textContent = c.emoji || '🙂';
+        const info = document.createElement('div');
+        info.className = 'char-info';
+        const nm = document.createElement('strong');
+        nm.textContent = c.name;
+        const desc = document.createElement('span');
+        desc.textContent = c.persona;
+        info.appendChild(nm); info.appendChild(desc);
+        const slot = document.createElement('span');
+        slot.className = 'char-slot';
+        slot.textContent = `接口${c.apiSlot}`;
+        li.append(mark, emoji, info, slot);
+        li.onclick = () => {
+            if (groupPick.has(c.id)) { groupPick.delete(c.id); li.classList.remove('picked'); mark.textContent = '○'; }
+            else { groupPick.add(c.id); li.classList.add('picked'); mark.textContent = '●'; }
+        };
+        ul.appendChild(li);
+    }
+    $('groupPickModal').hidden = false;
+}
+
+/** 某个角色优先用自己的接口槽位，挂了换另一个兜底 */
+function charApis(char) {
+    const { api1, api2 } = state.settings;
+    const pref = char.apiSlot === 2 ? api2 : api1;
+    const alt = char.apiSlot === 2 ? api1 : api2;
+    if (isApiConfigured(pref)) return [pref, alt];
+    return [alt, pref]; // 自己的槽位没配，直接用另一个
+}
+
+/** 把群聊历史翻译成某个角色视角下的对话：自己的话是 assistant，其他人的话带名字拼成 user */
+function groupMessagesFor(sess, char, extraTrigger) {
     const msgs = [{
         role: 'system',
-        content: buildGroupSystemPrompt(sess.subject, sess.points, sess.lastSummary, key),
+        content: buildGroupSystemPrompt(sess.subject, sess.points, sess.lastSummary, char, sess.chars, sess.memoriesText),
     }];
     let buf = [];
     for (const m of sess.history) {
-        if (m.speaker === key) {
+        if (m.speaker === char.id) {
             if (buf.length) { msgs.push({ role: 'user', content: buf.join('\n') }); buf = []; }
             msgs.push({ role: 'assistant', content: m.content });
         } else {
-            const label = m.speaker === 'user' ? '用户' : GROUP_PERSONAS[m.speaker].name;
+            const label = m.speaker === 'user' ? '用户' : (sess.charsById[m.speaker] || {}).name || '同学';
             buf.push(label + ': ' + m.content);
         }
     }
@@ -464,43 +646,38 @@ function groupMessagesFor(sess, key, extraTrigger) {
     return msgs;
 }
 
-/** 让某个 AI 同学说一句。A 走接口1、B 走接口2，挂了互相兜底。说"[跳过]"就不出声。 */
-async function personaReply(sess, key, trigger) {
-    const { api1, api2 } = state.settings;
-    const [pref, alt] = key === 'A' ? [api1, api2] : [api2, api1];
-    const name = GROUP_PERSONAS[key].name;
-    const messages = groupMessagesFor(sess, key, trigger);
-    const typing = addMsg(key === 'B' ? 'ai b typing' : 'ai typing', '…', name);
+/** 让某个角色说一句。说"[跳过]"就不出声。 */
+async function personaReply(sess, char, trigger) {
+    const [pref, alt] = charApis(char);
+    const messages = groupMessagesFor(sess, char, trigger);
+    const styleClass = sess.chars.indexOf(char) % 2 === 1 ? 'ai b' : 'ai';
+    const label = `${char.emoji || ''}${char.name}`;
+    const typing = addMsg(styleClass + ' typing', '…', label);
     try {
         let text;
         try {
             text = await chatOnce(pref, messages);
         } catch (e) {
             if (!isApiConfigured(alt)) throw e;
-            console.warn(`[群聊] ${name} 的接口失败，换另一个兜底:`, e.message);
+            console.warn(`[群聊] ${char.name} 的接口失败，换另一个兜底:`, e.message);
             text = await chatOnce(alt, messages);
         }
         typing.remove();
         if (state.session !== sess) return null; // 用户已经退出了
         if (/^\s*[\[（(]?\s*跳过\s*[\]）)]?\s*$/.test(text)) return null;
-        sess.history.push({ speaker: key, content: text });
-        addMsg(key === 'B' ? 'ai b' : 'ai', text, name);
+        sess.history.push({ speaker: char.id, content: text });
+        addMsg(styleClass, text, label);
         return text;
     } catch (e) {
         typing.remove();
-        if (state.session === sess) addMsg('sys', `${name} 掉线了：${e.message}`);
+        if (state.session === sess) addMsg('sys', `${char.name} 掉线了：${e.message}`);
         return null;
     }
 }
 
-async function startGroupReview() {
+async function startGroupReview(chars) {
     const sub = state.subjects.find(s => s.id === state.currentSubjectId);
     if (!sub) return;
-    const { api1, api2 } = state.settings;
-    if (!isApiConfigured(api1) || !isApiConfigured(api2)) {
-        toast('三人群聊需要两个接口都配置好（设置里把接口 2 也填上）', 'err');
-        return;
-    }
     const allPoints = await db.getByIndex('points', 'bySubject', sub.id);
     if (!allPoints.length) { toast('这个科目还没有知识点', 'err'); return; }
 
@@ -508,29 +685,38 @@ async function startGroupReview() {
     const sessions = await db.getByIndex('sessions', 'bySubject', sub.id);
     const last = sessions.sort((a, b) => b.startedAt - a.startedAt)[0];
 
+    // 记忆检索：找出最该想起的学习记忆（向量+关键词混合）
+    const memories = await retrieveMemories(sub, picked, state.settings);
+
     state.session = {
         id: db.uid(),
         mode: 'group',
         subject: sub,
         points: picked,
-        history: [],            // [{speaker:'user'|'A'|'B', content}]
+        chars,
+        charsById: Object.fromEntries(chars.map(c => [c.id, c])),
+        history: [],            // [{speaker:'user'|charId, content}]
         lastSummary: last && last.summary,
+        memoriesText: formatMemories(memories),
         touched: {},
         turns: 0,
         startedAt: Date.now(),
         busy: false,
     };
 
-    $('chatSubjectName').textContent = sub.name + ' · 群聊';
-    $('chatApiBadge').textContent = `${GROUP_PERSONAS.A.name}=接口1 · ${GROUP_PERSONAS.B.name}=接口2`;
+    $('chatSubjectName').textContent = sub.name + (chars.length > 1 ? ' · 群聊' : '');
+    $('chatApiBadge').textContent = chars.map(c => `${c.name}=接口${c.apiSlot}`).join(' · ')
+        + (memories.length ? ` · 带着${memories.length}条记忆` : '');
     $('chatMessages').innerHTML = '';
     showView('viewChat');
     $('chatInput').value = '';
 
     const sess = state.session;
     sess.busy = true;
-    await personaReply(sess, 'A', GROUP_OPENING_A);
-    if (state.session === sess) await personaReply(sess, 'B', GROUP_OPENING_B);
+    for (let i = 0; i < chars.length; i++) {
+        if (state.session !== sess) break;
+        await personaReply(sess, chars[i], i === 0 ? GROUP_OPENING_FIRST : GROUP_OPENING_NEXT);
+    }
     sess.busy = false;
     $('chatInput').focus();
 }
@@ -552,10 +738,12 @@ async function sendMessage() {
         addMsg('me', text);
         judgeInBackground(sess);
         // 谁先接话轮流来，群聊更活
-        const order = sess.turns % 2 === 1 ? ['A', 'B'] : ['B', 'A'];
-        for (const key of order) {
+        const n = sess.chars.length;
+        const offset = sess.turns % n;
+        const order = [...sess.chars.slice(offset), ...sess.chars.slice(0, offset)];
+        for (const char of order) {
             if (state.session !== sess) break;
-            await personaReply(sess, key);
+            await personaReply(sess, char);
         }
         sess.busy = false;
         input.focus();
@@ -595,7 +783,7 @@ async function judgeInBackground(sess) {
         const recent = sess.mode === 'group'
             ? sess.history.slice(-6).map(m => ({
                 role: m.speaker === 'user' ? 'user' : 'assistant',
-                content: m.speaker === 'user' ? m.content : `${GROUP_PERSONAS[m.speaker].name}: ${m.content}`,
+                content: m.speaker === 'user' ? m.content : `${((sess.charsById[m.speaker] || {}).name) || '同学'}: ${m.content}`,
             }))
             : sess.apiMessages
                 .filter(m => m.role !== 'system' && m.content !== OPENING_TRIGGER && m.content !== CLOSING_TRIGGER)
@@ -634,7 +822,7 @@ async function endSession(silent = false) {
     if (!silent && sess.turns > 0) {
         $('btnEndSession').disabled = true;
         if (sess.mode === 'group') {
-            summary = (await personaReply(sess, 'A', GROUP_CLOSING)) || '';
+            summary = (await personaReply(sess, sess.chars[0], GROUP_CLOSING)) || '';
         } else {
             const typing = addMsg('ai typing', '…');
             try {
@@ -665,10 +853,29 @@ async function endSession(silent = false) {
 
     state.session = null;
 
-    // 自动备份
-    const gh = state.settings.github;
-    if (sess.turns > 0 && gh && gh.token && gh.autoBackup !== false) {
-        backupNow(true);
+    if (sess.turns > 0) {
+        // 后台提炼学习记忆（记忆宫殿管线：提炼→向量化→入库）
+        const visible = sess.mode === 'group'
+            ? sess.history.map(m => ({
+                role: m.speaker === 'user' ? 'user' : 'assistant',
+                name: m.speaker === 'user' ? '用户' : ((sess.charsById[m.speaker] || {}).name || '同学'),
+                content: m.content,
+            }))
+            : sess.apiMessages
+                .filter(m => m.role !== 'system' && m.content !== OPENING_TRIGGER && m.content !== CLOSING_TRIGGER)
+                .map(m => ({ role: m.role, content: m.content }));
+        digestSession(sess.subject, visible, state.settings).then(n => {
+            if (n > 0) {
+                toast(`记下了 ${n} 条学习记忆 🧠`, 'ok');
+                if (state.currentSubjectId === sess.subject.id) renderSubjectView();
+            }
+        });
+
+        // 自动备份
+        const gh = state.settings.github;
+        if (gh && gh.token && gh.autoBackup !== false) {
+            backupNow(true);
+        }
     }
 
     await selectSubject(sess.subject.id);
@@ -756,7 +963,34 @@ function bindEvents() {
     $('btnBackupNow').onclick = async () => { await saveSettingsQuiet(); backupNow(); };
     $('btnRestore').onclick = restoreFromCloud;
     $('btnStartReview').onclick = startReview;
-    $('btnStartGroup').onclick = startGroupReview;
+    $('btnStartGroup').onclick = openGroupPicker;
+    $('btnCloseGroupPick').onclick = () => { $('groupPickModal').hidden = true; };
+    $('btnConfirmGroup').onclick = () => {
+        const chars = state.characters.filter(c => groupPick.has(c.id));
+        if (!chars.length) { toast('至少勾一个同学', 'err'); return; }
+        if (chars.length > 4) { toast('最多 4 个，人太多你一句他们四句，遭不住', 'err'); return; }
+        $('groupPickModal').hidden = true;
+        startGroupReview(chars);
+    };
+    $('btnCharacters').onclick = () => { renderCharList(); $('charEditor').hidden = true; $('charModal').hidden = false; };
+    $('btnCloseChars').onclick = () => { $('charModal').hidden = true; };
+    $('btnAddChar').onclick = () => openCharEditor(null);
+    $('btnSaveChar').onclick = saveCharacter;
+    $('btnCancelChar').onclick = () => { $('charEditor').hidden = true; state.editingCharId = null; };
+    $('btnTestEmbed').onclick = async () => {
+        const s = readSettingsForm();
+        if (!isEmbedConfigured(s.embed)) { toast('向量接口的地址 / 钥匙 / 模型名要填全', 'err'); return; }
+        const btn = $('btnTestEmbed');
+        btn.disabled = true; btn.textContent = '测试中…';
+        try {
+            const dim = await testEmbed(s.embed);
+            toast(`向量接口正常 ✓（${dim} 维）`, 'ok');
+        } catch (e) {
+            toast('向量接口不通：' + e.message, 'err');
+        } finally {
+            btn.disabled = false; btn.textContent = '测试向量接口';
+        }
+    };
     $('btnFetchModels1').onclick = () => fetchModelsSlot(1);
     $('btnFetchModels2').onclick = () => fetchModelsSlot(2);
     $('api1ModelSelect').onchange = (e) => { if (e.target.value) $('api1Model').value = e.target.value; };
@@ -785,15 +1019,18 @@ function bindEvents() {
         }
     });
     // 弹窗点遮罩关闭
-    $('settingsModal').addEventListener('click', (e) => {
-        if (e.target === $('settingsModal')) $('settingsModal').hidden = true;
-    });
+    for (const id of ['settingsModal', 'charModal', 'groupPickModal']) {
+        $(id).addEventListener('click', (e) => {
+            if (e.target === $(id)) $(id).hidden = true;
+        });
+    }
 }
 
 async function saveSettingsQuiet() {
     const s = readSettingsForm();
     await db.setSetting('api1', s.api1);
     await db.setSetting('api2', s.api2);
+    await db.setSetting('embed', s.embed);
     await db.setSetting('github', s.github);
     state.settings = s;
 }
@@ -801,6 +1038,7 @@ async function saveSettingsQuiet() {
 async function main() {
     bindEvents();
     await loadSettings();
+    await loadCharacters();
     updateBackupStatus();
     await refreshSubjects();
     // 第一次用：自动弹设置

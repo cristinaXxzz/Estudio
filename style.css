@@ -203,6 +203,50 @@ body { display: flex; flex-direction: column; }
 
 .primary-btn.alt { background: #4a6fa5; }
 
+/* ---------- 角色 ---------- */
+.char-list { list-style: none; margin: 10px 0; padding: 0; }
+.char-list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 6px; border-top: 1px solid var(--line); font-size: 14px;
+}
+.char-list .char-emoji { font-size: 20px; }
+.char-list .char-info { flex: 1; min-width: 0; }
+.char-list .char-info strong { display: block; }
+.char-list .char-info span {
+  font-size: 12px; color: var(--ink-soft);
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.char-list .char-slot { font-size: 11px; color: var(--ink-soft); flex-shrink: 0; }
+.char-list.pickable li { cursor: pointer; border-radius: 8px; }
+.char-list.pickable li:hover { background: var(--bg); }
+.char-list.pickable li.picked { background: var(--accent-soft); }
+.char-list.pickable .pick-mark { font-size: 16px; width: 22px; text-align: center; }
+.char-editor {
+  margin-top: 14px; padding: 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.char-editor h3 { margin: 0 0 10px !important; }
+.char-editor textarea {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  font-size: 13.5px; background: var(--panel); outline: none;
+  font-family: inherit; resize: vertical;
+}
+.char-editor textarea:focus { border-color: var(--accent); }
+
+/* ---------- 记忆 ---------- */
+.memory-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.memory-list li {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 4px; border-top: 1px solid var(--line); font-size: 13.5px;
+}
+.memory-room {
+  flex-shrink: 0; font-size: 11px; color: var(--ink-soft);
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 1px 7px; white-space: nowrap;
+}
+.memory-content { flex: 1; }
+.memory-vec { font-size: 11px; flex-shrink: 0; }
+
 .model-row { display: flex; gap: 8px; }
 .model-row input { flex: 1; }
 .model-select {

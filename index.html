@@ -17,6 +17,7 @@
   </div>
   <div class="topbar-right">
     <span id="backupStatus" class="backup-status"></span>
+    <button id="btnCharacters" class="icon-btn" title="管理AI角色">🎭 角色</button>
     <button id="btnSettings" class="icon-btn" title="设置">⚙️ 设置</button>
   </div>
 </header>
@@ -53,7 +54,7 @@
         </div>
         <div class="btn-row">
           <button id="btnStartReview" class="primary-btn big">💬 开始复习</button>
-          <button id="btnStartGroup" class="primary-btn big alt" title="接口1和接口2各扮演一个同学，三个人一起聊">👥 三人群聊</button>
+          <button id="btnStartGroup" class="primary-btn big alt" title="挑几个AI角色拉群一起复习">👥 拉群复习</button>
         </div>
       </div>
 
@@ -62,10 +63,10 @@
           <h2>资料</h2>
           <label class="mini-btn file-label">
             ＋ 上传文件
-            <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf,.docx,.doc,.markdown" hidden>
+            <input type="file" id="fileInput" multiple accept=".txt,.md,.markdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.html,.htm" hidden>
           </label>
         </div>
-        <p class="hint">支持 txt / md / pdf / docx。上传后 AI 会自动把内容拆成知识点。</p>
+        <p class="hint">支持 txt / md / pdf / docx / pptx / xlsx / csv / html。上传后 AI 会自动把内容拆成知识点。</p>
         <div id="extractProgress" class="progress-row" hidden>
           <div class="progress-bar"><div id="extractProgressFill" class="progress-fill"></div></div>
           <span id="extractProgressText"></span>
@@ -79,6 +80,15 @@
           <span id="pointCount" class="hint"></span>
         </div>
         <ul id="pointList" class="point-list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>它记住的你</h2>
+          <span id="memoryCount" class="hint"></span>
+        </div>
+        <p class="hint">每次复习后 AI 自动提炼的学习记忆（薄弱点、易混淆、对你管用的讲法…），下次复习会自动带上。不对的可以删。</p>
+        <ul id="memoryList" class="memory-list"></ul>
       </div>
 
       <div class="panel">
@@ -140,6 +150,15 @@
         <button id="btnTestApi2" class="mini-btn">测试接口 2</button>
       </div>
 
+      <h3>记忆向量接口（可选，给"学习记忆"提速）</h3>
+      <p class="hint">填一个 Embedding（向量）接口后，AI 的记忆检索会更聪明——按"意思相近"找记忆，而不只是字面匹配。不填也能用（退化为关键词检索）。硅基流动等服务有免费的向量模型。</p>
+      <div class="form-grid">
+        <input id="embedBaseUrl" placeholder="向量接口地址，例如 https://api.siliconflow.cn/v1">
+        <input id="embedKey" type="password" placeholder="API Key">
+        <input id="embedModel" placeholder="向量模型名，例如 BAAI/bge-m3">
+        <button id="btnTestEmbed" class="mini-btn">测试向量接口</button>
+      </div>
+
       <h3>GitHub 云备份</h3>
       <p class="hint">填一个 GitHub Token（钥匙），数据会自动备份到你账号下的一个<strong>私有</strong>仓库。怎么申请 Token 见 README。</p>
       <div class="form-grid">
@@ -156,6 +175,59 @@
 
     <div class="modal-foot">
       <button id="btnSaveSettings" class="primary-btn">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- 角色管理弹窗 -->
+<div id="charModal" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>🎭 AI 角色</h2>
+      <button id="btnCloseChars" class="icon-btn">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">这些是能拉进群聊陪你复习的 AI 同学。可以改人设、换接口，也可以自己造新的。</p>
+      <ul id="charList" class="char-list"></ul>
+      <button id="btnAddChar" class="mini-btn">＋ 新角色</button>
+
+      <div id="charEditor" class="char-editor" hidden>
+        <h3 id="charEditorTitle">编辑角色</h3>
+        <div class="form-grid">
+          <div class="model-row">
+            <input id="charEmoji" placeholder="表情" maxlength="4" style="max-width:70px">
+            <input id="charName" placeholder="名字（比如：教授、毒舌学霸…）">
+          </div>
+          <textarea id="charPersona" rows="4" placeholder="人设：这个角色是什么性格、怎么说话、在复习里负责干什么？写得越具体越像。"></textarea>
+          <label class="check-row">用哪个接口说话：
+            <select id="charApiSlot" class="model-select">
+              <option value="1">接口 1</option>
+              <option value="2">接口 2</option>
+            </select>
+          </label>
+          <div class="btn-row">
+            <button id="btnSaveChar" class="primary-btn">保存角色</button>
+            <button id="btnCancelChar" class="mini-btn">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 群聊选人弹窗 -->
+<div id="groupPickModal" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>👥 谁来陪你复习？</h2>
+      <button id="btnCloseGroupPick" class="icon-btn">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">勾选要拉进群的 AI 同学（1 个就是单聊，2~3 个群聊最热闹）。想加新角色去「🎭 角色」。</p>
+      <ul id="groupPickList" class="char-list pickable"></ul>
+    </div>
+    <div class="modal-foot">
+      <button id="btnConfirmGroup" class="primary-btn">开聊 💬</button>
     </div>
   </div>
 </div>

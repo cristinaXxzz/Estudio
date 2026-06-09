@@ -2,7 +2,13 @@
  * 对话式复习的提示词。核心人设：聊得来的学伴，不是出题机器，更不是幼儿园老师。
  */
 
-export function buildSystemPrompt(subject, points, lastSessionSummary) {
+function memoryBlock(memoriesText) {
+    return memoriesText
+        ? `\n你对这个用户的记忆（之前复习时积累的，自然地用上，不要照念）：\n${memoriesText}\n`
+        : '';
+}
+
+export function buildSystemPrompt(subject, points, lastSessionSummary, memoriesText) {
     const pointList = points.map((p, i) =>
         `[P${i + 1}] ${p.title}\n${p.content}\n（之前掌握度：${p.reviews > 0 ? p.mastery + '/5' : '还没复习过'}）`
     ).join('\n\n');
@@ -14,7 +20,7 @@ export function buildSystemPrompt(subject, points, lastSessionSummary) {
     return `你是用户的复习学伴，正在陪用户复习「${subject.name}」。下面是这次要覆盖的知识点，全部来自用户自己上传的资料：
 
 ${pointList}
-${lastNote}
+${lastNote}${memoryBlock(memoriesText)}
 聊天方式：
 - 开场先像朋友一样轻松聊一两句，然后自然把话题引到第一个知识点上，不要生硬报幕"我们开始复习吧"。
 - 边聊边复习：抛问题或者编个具体场景让用户用自己的话回答；根据回答判断他到底懂没懂，决定是追问细节、纠正错误，还是干脆讲清楚。
@@ -34,17 +40,30 @@ export const OPENING_TRIGGER = '（系统：复习开始，请按人设开场。
 export const CLOSING_TRIGGER =
     '（系统：用户要结束本次复习了。请用两三句话自然收尾：今天聊了什么、哪里掌握得不错、哪里下次再看看。像朋友道别，不要列清单。）';
 
-// ---------- 三人群聊模式 ----------
-// 两个 AI 各有人设：小言负责引导推进，老杠负责挑刺抬杠。
+// ---------- 群聊模式（自建角色，逻辑仿 SULLYOS 群聊） ----------
 
-export const GROUP_PERSONAS = {
-    A: { name: '小言', style: '你负责推进复习节奏：抛问题、设场景、讲解、把跑题的话拉回来。语气随和但不哄人。' },
-    B: { name: '老杠', style: '你是爱抬杠的那个同学：专挑用户回答里的漏洞和含糊处追问，爱举反例、唱反调、补冷知识。杠要杠在点子上，不无理取闹。' },
-};
+/** 内置的两个默认角色，首次启动时种进角色库，之后用户可改可删可加 */
+export const DEFAULT_CHARACTERS = [
+    {
+        name: '小言', emoji: '🦉', apiSlot: 1,
+        persona: '推进型学伴：负责把控复习节奏——抛问题、设场景、讲解、把跑题的话拉回来。语气随和但不哄人，认可就平常地认可。',
+    },
+    {
+        name: '老杠', emoji: '🦔', apiSlot: 2,
+        persona: '爱抬杠的同学：专挑用户回答里的漏洞和含糊处追问，爱举反例、唱反调、补冷知识。杠要杠在点子上，不无理取闹。',
+    },
+];
 
-export function buildGroupSystemPrompt(subject, points, lastSessionSummary, selfKey) {
-    const self = GROUP_PERSONAS[selfKey];
-    const other = GROUP_PERSONAS[selfKey === 'A' ? 'B' : 'A'];
+/**
+ * 给群里某个角色构建系统提示词。
+ * char: 当前发言的角色；members: 群里全部 AI 角色
+ */
+export function buildGroupSystemPrompt(subject, points, lastSessionSummary, char, members, memoriesText) {
+    const others = members.filter(c => c.id !== char.id);
+    const othersDesc = others.length
+        ? others.map(c => `${c.name}：${c.persona}`).join('\n')
+        : '（没有别的AI，就你和用户）';
+    const memberNames = ['用户', ...members.map(c => c.name)].join('、');
     const pointList = points.map((p, i) =>
         `[P${i + 1}] ${p.title}\n${p.content}\n（之前掌握度：${p.reviews > 0 ? p.mastery + '/5' : '还没复习过'}）`
     ).join('\n\n');
@@ -52,28 +71,30 @@ export function buildGroupSystemPrompt(subject, points, lastSessionSummary, self
         ? `\n上次复习的收尾记录（开场可以自然提一嘴，别照念）：${lastSessionSummary}\n`
         : '';
 
-    return `这是一个三人群聊：用户、你（${self.name}）、还有${other.name}。你们俩是用户的同学，正在一起陪用户复习「${subject.name}」。
+    return `这是一个群聊，成员：${memberNames}。大家是用户的同学，正在一起陪用户复习「${subject.name}」。
 
-你的角色：${self.name}。${self.style}
-${other.name}的角色（不要替他说话）：${other.style}
+你的角色：${char.name}。${char.persona}
+
+群里其他AI同学（不要替他们说话）：
+${othersDesc}
 
 这次要覆盖的知识点（来自用户上传的资料）：
 
 ${pointList}
-${lastNote}
+${lastNote}${memoryBlock(memoriesText)}
 群聊规则：
 - 你只发自己这一条消息，开头不要写自己的名字（界面会自动显示），不要替别人说话，不要复述别人刚说过的内容。
 - 边聊边复习：围绕一个知识点聊透再换下一个；根据用户的回答决定追问、纠错还是讲解。
 - 语气像聊得来的同学，口语化。严禁幼儿园式夸奖（"答对啦！""真棒！"一律禁止）。
-- 可以接${other.name}的话、反驳他、跟他讨论，但最终目的是帮用户搞懂。
+- 可以接别人的话、反驳、互相讨论，但最终目的是帮用户搞懂。
 - 用户反问要认真答；用户跑题就顺着聊一两句再拉回来；用户想结束就自然收尾。
 - 每条消息一般不超过100字，像群聊消息，不列清单不用markdown标题。
-- 如果这一轮你确实没什么可说的（比如对方刚说的已经很完整），就只回复：[跳过]
+- 如果这一轮你确实没什么可说的（比如别人刚说的已经很完整），就只回复：[跳过]
 - 默认用中文；材料里其他语言（西语/英语等）的术语保留原语言。`;
 }
 
-export const GROUP_OPENING_A = '（系统：复习开始。你先开场：轻松聊一两句，自然引入第一个知识点。）';
-export const GROUP_OPENING_B = '（系统：复习刚开始，小言已开场。你简单冒个泡，一两句即可，可以对小言的开场补一刀或者直接向用户施压。）';
+export const GROUP_OPENING_FIRST = '（系统：复习开始。你先开场：轻松聊一两句，自然引入第一个知识点。）';
+export const GROUP_OPENING_NEXT = '（系统：复习刚开始，前面的同学已开场。你简单冒个泡，一两句即可，可以接话补一刀或者直接向用户发问。）';
 export const GROUP_CLOSING = '（系统：用户要结束本次复习了。请你代表大家用两三句话自然收尾：今天聊了什么、哪里不错、哪里下次再看。像朋友道别，不要列清单。）';
 
 export function buildJudgePrompt(points, recentMessages) {

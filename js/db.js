@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'estudio-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let _db = null;
 
@@ -31,6 +31,14 @@ export function openDB() {
             }
             if (!db.objectStoreNames.contains('sessions')) {
                 const s = db.createObjectStore('sessions', { keyPath: 'id' });
+                s.createIndex('bySubject', 'subjectId');
+            }
+            // v2：自建角色 + 学习记忆（记忆宫殿，逻辑移植自 SULLYOS memoryPalace）
+            if (!db.objectStoreNames.contains('characters')) {
+                db.createObjectStore('characters', { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains('memories')) {
+                const s = db.createObjectStore('memories', { keyPath: 'id' });
                 s.createIndex('bySubject', 'subjectId');
             }
         };
@@ -108,14 +116,16 @@ export async function setSetting(key, value) {
 // ---------- 级联删除：删科目时连带删文件/知识点/记录 ----------
 
 export async function deleteSubjectCascade(subjectId) {
-    const [files, points, sessions] = await Promise.all([
+    const [files, points, sessions, memories] = await Promise.all([
         getByIndex('files', 'bySubject', subjectId),
         getByIndex('points', 'bySubject', subjectId),
         getByIndex('sessions', 'bySubject', subjectId),
+        getByIndex('memories', 'bySubject', subjectId),
     ]);
     for (const f of files) await del('files', f.id);
     for (const p of points) await del('points', p.id);
     for (const s of sessions) await del('sessions', s.id);
+    for (const m of memories) await del('memories', m.id);
     await del('subjects', subjectId);
 }
 
@@ -127,19 +137,22 @@ export async function deleteFileCascade(fileId) {
 
 // ---------- 整库导出 / 导入（备份用）----------
 
+const SETTING_KEYS = ['api1', 'api2', 'github', 'embed', 'modelList1', 'modelList2'];
+
 export async function exportAll() {
-    const [subjects, files, points, sessions] = await Promise.all([
+    const [subjects, files, points, sessions, characters, memories] = await Promise.all([
         getAll('subjects'), getAll('files'), getAll('points'), getAll('sessions'),
+        getAll('characters'), getAll('memories'),
     ]);
     const settings = {};
-    for (const key of ['api1', 'api2', 'github']) {
+    for (const key of SETTING_KEYS) {
         settings[key] = await getSetting(key);
     }
     return {
         app: 'estudio',
-        version: 1,
+        version: 2,
         timestamp: Date.now(),
-        settings, subjects, files, points, sessions,
+        settings, subjects, files, points, sessions, characters, memories,
     };
 }
 
@@ -147,12 +160,15 @@ export async function importAll(data) {
     if (!data || data.app !== 'estudio') throw new Error('这不是 Estudio 的备份文件');
     await clear('subjects'); await clear('files');
     await clear('points'); await clear('sessions');
+    await clear('characters'); await clear('memories');
     for (const x of data.subjects || []) await put('subjects', x);
     for (const x of data.files || []) await put('files', x);
     for (const x of data.points || []) await put('points', x);
     for (const x of data.sessions || []) await put('sessions', x);
+    for (const x of data.characters || []) await put('characters', x);
+    for (const x of data.memories || []) await put('memories', x);
     if (data.settings) {
-        for (const key of ['api1', 'api2', 'github']) {
+        for (const key of SETTING_KEYS) {
             if (data.settings[key]) await setSetting(key, data.settings[key]);
         }
     }
