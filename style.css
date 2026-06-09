@@ -311,8 +311,25 @@ body { display: flex; flex-direction: column; }
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ---------- 手机适配：侧栏变成顶部横条，科目横着滑 ---------- */
 @media (max-width: 760px) {
-  .sidebar { width: 170px; }
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: 100%; flex-direction: row; align-items: center;
+    border-right: none; border-bottom: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
+  }
+  .sidebar-head { padding: 8px 10px; flex-shrink: 0; gap: 8px; }
+  .subject-list { display: flex; padding: 6px 8px; gap: 4px; }
+  .subject-list li { white-space: nowrap; flex-shrink: 0; padding: 7px 10px; }
+  .subject-list .del-subject { visibility: visible; }
+  .brand-sub { display: none; }
+  .topbar { padding: 8px 12px; }
+  .subject-header h1 { font-size: 20px; }
+  .primary-btn.big { padding: 10px 16px; font-size: 14px; }
   .chat-messages, .chat-composer { padding-left: 4%; padding-right: 4%; }
-  .view { padding: 16px; }
+  .msg, .msg-group { max-width: 88%; }
+  .view { padding: 14px; }
+  .modal { width: 94vw; max-height: 92vh; }
+  .chat-composer textarea { font-size: 16px; } /* 16px 以下 iOS 会自动放大页面 */
 }

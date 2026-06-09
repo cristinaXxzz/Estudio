@@ -1,0 +1,12 @@
+{
+  "name": "Estudio 对话式复习",
+  "short_name": "Estudio",
+  "description": "陪你边聊边复习的 AI 学伴",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#c2571c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
