@@ -125,6 +125,9 @@ function fillSettingsForm() {
     const notion = state.settings.notion;
     $('notionToken').value = (notion && notion.token) || '';
     $('notionParent').value = (notion && notion.parent) || '';
+    $('notionCategoryProp').value = (notion && notion.categoryProperty) || '';
+    $('notionCategories').value = (notion && notion.categories) || '';
+    $('notionRecapCategory').value = (notion && notion.recapCategory) || '';
     $('notionAutoRecap').checked = !notion || notion.autoRecap !== false;
     $('ghToken').value = (github && github.token) || '';
     $('ghRepo').value = (github && github.repo) || '';
@@ -154,6 +157,9 @@ function readSettingsForm() {
         notion: {
             token: $('notionToken').value.trim(),
             parent: $('notionParent').value.trim(),
+            categoryProperty: $('notionCategoryProp').value.trim(),
+            categories: $('notionCategories').value.trim(),
+            recapCategory: $('notionRecapCategory').value.trim(),
             autoRecap: $('notionAutoRecap').checked,
         },
         github: {
@@ -527,7 +533,10 @@ async function runNotionJobs(jobs) {
     if (!cfg || !jobs.length) return;
     for (const job of jobs) {
         try {
-            await createNotePage(cfg, job.title, job.md);
+            await createNotePage(cfg, job.title, job.md, job.emoji || '📝', {
+                category: job.category,
+                emoji: job.emoji,
+            });
             addMsg('sys', `📝 已写进 Notion：${job.title}`);
         } catch (e) {
             console.error(e);
@@ -561,7 +570,10 @@ async function writeNotionRecap(sess, visible) {
         ], { maxTokens: 2000, timeoutMs: 90000 });
         const d = new Date(sess.startedAt);
         const title = `${d.getMonth() + 1}月${d.getDate()}日 ${sess.subject.name} 复盘`;
-        await createNotePage(cfg, title, md.replace(/^```(?:markdown)?\s*\n?|```\s*$/g, ''), '📅');
+        await createNotePage(cfg, title, md.replace(/^```(?:markdown)?\s*\n?|```\s*$/g, ''), '📅', {
+            category: (cfg.recapCategory || '').trim() || '复盘',
+            emoji: '📅',
+        });
         toast(`「${title}」已写进 Notion 📅`, 'ok');
     } catch (e) {
         console.error(e);
@@ -1085,8 +1097,8 @@ function bindEvents() {
         const btn = $('btnTestNotion');
         btn.disabled = true; btn.textContent = '测试中…';
         try {
-            await testNotion(s.notion);
-            toast('Notion 连接正常 ✓', 'ok');
+            const target = await testNotion(s.notion);
+            toast(`Notion ${target.type === 'database' ? '数据库' : '页面'}连接正常 ✓`, 'ok');
         } catch (e) {
             toast('Notion 不通：' + e.message + '（检查 Token，以及父页面是否已连接你的 integration）', 'err');
         } finally {

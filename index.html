@@ -163,10 +163,13 @@
       </div>
 
       <h3>Notion 笔记（可选）</h3>
-      <p class="hint">连上后：复习结束自动往你的 Notion 写「今日复盘」；聊天时说"帮我记到 Notion"，AI 会现场建笔记页。怎么拿 Token、怎么授权页面见 README。</p>
+      <p class="hint">连上后：复习结束自动往你的 Notion 写「今日复盘」；聊天时说"帮我记到 Notion"，AI 会现场建笔记页。可以粘截图里那种笔记页或数据库链接；如果页面里有内嵌数据库，会优先写进数据库。</p>
       <div class="form-grid">
         <input id="notionToken" type="password" placeholder="Notion Token（ntn_ 或 secret_ 开头）">
-        <input id="notionParent" placeholder="笔记本父页面的链接（笔记都建在它下面）">
+        <input id="notionParent" placeholder="笔记页面或数据库链接（推荐粘 Notion 数据库链接）">
+        <input id="notionCategoryProp" placeholder="分类属性名（可选，默认：分类）">
+        <input id="notionCategories" placeholder="分类选项（可选：个人, 学习内容, 复盘, 其他计划, 归档）">
+        <input id="notionRecapCategory" placeholder="今日复盘用哪个分类（可选，默认：复盘）">
         <label class="check-row"><input type="checkbox" id="notionAutoRecap" checked> 复习结束自动写「今日复盘」</label>
         <button id="btnTestNotion" class="mini-btn">测试 Notion</button>
       </div>

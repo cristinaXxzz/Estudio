@@ -6,10 +6,10 @@
 export const NOTION_TOOL_RULES = `
 
 你还能往用户的 Notion 笔记本里写笔记。当用户让你"记到Notion/帮我做笔记/整理一下存起来"之类时，正常回复之余，在消息最末尾追加这样一段（这段用户看不到，会被程序摘走执行）：
-<notion title="笔记标题">
+<notion title="笔记标题" category="学习内容">
 笔记正文，用 markdown：## 小标题、- 列表、普通段落、> 引用
 </notion>
-注意：用户没让记就不要写；一条消息最多一个 <notion> 块；笔记内容要完整自洽，别写"如上所述"。`;
+category 取最贴近的宽泛分类即可，比如：个人、学习内容、复盘、其他计划、归档；不确定就用"学习内容"。注意：用户没让记就不要写；一条消息最多一个 <notion> 块；笔记内容要完整自洽，别写"如上所述"。`;
 
 function notionBlock(enabled) {
     return enabled ? NOTION_TOOL_RULES : '';
