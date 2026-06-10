@@ -137,7 +137,7 @@ export async function deleteFileCascade(fileId) {
 
 // ---------- 整库导出 / 导入（备份用）----------
 
-const SETTING_KEYS = ['api1', 'api2', 'github', 'embed', 'modelList1', 'modelList2'];
+const SETTING_KEYS = ['api1', 'api2', 'github', 'embed', 'notion', 'modelList1', 'modelList2'];
 
 export async function exportAll() {
     const [subjects, files, points, sessions, characters, memories] = await Promise.all([

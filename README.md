@@ -59,6 +59,16 @@ node D:\study\server.js
 备份存在你账号下一个叫 `estudio-backup` 的**私有**仓库里（自动创建），别人看不到。
 「走中转站连 GitHub」这个勾：在国内就保持勾上（直连 GitHub 经常不通）；在国外可以取消。
 
+## Notion 笔记（可选）
+
+连上 Notion 后：①每次复习结束，AI 自动把「今日复盘」写成一页笔记（今天聊了什么、哪里不错、哪里再看、下次计划）；②聊天时说"帮我把这个记到 Notion"，AI 现场建笔记页。
+
+怎么连（一次性配置，5 分钟）：
+1. 打开 https://www.notion.so/profile/integrations → 「New integration」→ 起个名（比如 Estudio）→ 创建，复制那串 `ntn_` 开头的 **Token**
+2. 在 Notion 里建一个页面当"复习笔记本"（比如叫 📚复习笔记），所有笔记都会建在它下面
+3. 打开这个页面 → 右上角「···」→ **连接（Connections）** → 选你刚建的 integration（这步是授权，漏了会报"找不到页面"）
+4. 回到 Estudio 设置：把 Token 和这个页面的**链接**（浏览器地址栏整个复制）粘进去 → 「测试 Notion」→ ✓
+
 ## 五、出错了？先试这三招
 
 1. **刷新网页**（F5）。十有八九能解决。

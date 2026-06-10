@@ -162,6 +162,15 @@
         <button id="btnTestEmbed" class="mini-btn">测试向量接口</button>
       </div>
 
+      <h3>Notion 笔记（可选）</h3>
+      <p class="hint">连上后：复习结束自动往你的 Notion 写「今日复盘」；聊天时说"帮我记到 Notion"，AI 会现场建笔记页。怎么拿 Token、怎么授权页面见 README。</p>
+      <div class="form-grid">
+        <input id="notionToken" type="password" placeholder="Notion Token（ntn_ 或 secret_ 开头）">
+        <input id="notionParent" placeholder="笔记本父页面的链接（笔记都建在它下面）">
+        <label class="check-row"><input type="checkbox" id="notionAutoRecap" checked> 复习结束自动写「今日复盘」</label>
+        <button id="btnTestNotion" class="mini-btn">测试 Notion</button>
+      </div>
+
       <h3>GitHub 云备份</h3>
       <p class="hint">填一个 GitHub Token（钥匙），数据会自动备份到你账号下的一个<strong>私有</strong>仓库。怎么申请 Token 见 README。</p>
       <div class="form-grid">

@@ -2,13 +2,26 @@
  * 对话式复习的提示词。核心人设：聊得来的学伴，不是出题机器，更不是幼儿园老师。
  */
 
+/** Notion 配置好时追加到系统提示词里的"写笔记"工具说明 */
+export const NOTION_TOOL_RULES = `
+
+你还能往用户的 Notion 笔记本里写笔记。当用户让你"记到Notion/帮我做笔记/整理一下存起来"之类时，正常回复之余，在消息最末尾追加这样一段（这段用户看不到，会被程序摘走执行）：
+<notion title="笔记标题">
+笔记正文，用 markdown：## 小标题、- 列表、普通段落、> 引用
+</notion>
+注意：用户没让记就不要写；一条消息最多一个 <notion> 块；笔记内容要完整自洽，别写"如上所述"。`;
+
+function notionBlock(enabled) {
+    return enabled ? NOTION_TOOL_RULES : '';
+}
+
 function memoryBlock(memoriesText) {
     return memoriesText
         ? `\n你对这个用户的记忆（之前复习时积累的，自然地用上，不要照念）：\n${memoriesText}\n`
         : '';
 }
 
-export function buildSystemPrompt(subject, points, lastSessionSummary, memoriesText) {
+export function buildSystemPrompt(subject, points, lastSessionSummary, memoriesText, notionEnabled) {
     const pointList = points.map((p, i) =>
         `[P${i + 1}] ${p.title}\n${p.content}\n（之前掌握度：${p.reviews > 0 ? p.mastery + '/5' : '还没复习过'}）`
     ).join('\n\n');
@@ -30,7 +43,7 @@ ${lastNote}${memoryBlock(memoriesText)}
 - 用户反问你，要认真回答；用户用自己的话解释概念，帮他挑毛病；用户跑题了，顺着聊一两句再自然把话拉回来。
 - 用户表示想结束时自然收尾，不要挽留。
 - 每条回复保持简短，一般不超过150字，像聊天软件里的消息。不要列编号清单、不要用markdown标题、不要一次塞好几个问题。
-- 默认用中文聊；材料里的术语和原文如果是其他语言（西班牙语、英语等），保留原语言，需要时顺带解释。`;
+- 默认用中文聊；材料里的术语和原文如果是其他语言（西班牙语、英语等），保留原语言，需要时顺带解释。${notionBlock(notionEnabled)}`;
 }
 
 /** 开场触发（不显示给用户） */
@@ -58,7 +71,7 @@ export const DEFAULT_CHARACTERS = [
  * 给群里某个角色构建系统提示词。
  * char: 当前发言的角色；members: 群里全部 AI 角色
  */
-export function buildGroupSystemPrompt(subject, points, lastSessionSummary, char, members, memoriesText) {
+export function buildGroupSystemPrompt(subject, points, lastSessionSummary, char, members, memoriesText, notionEnabled) {
     const others = members.filter(c => c.id !== char.id);
     const othersDesc = others.length
         ? others.map(c => `${c.name}：${c.persona}`).join('\n')
@@ -90,7 +103,7 @@ ${lastNote}${memoryBlock(memoriesText)}
 - 用户反问要认真答；用户跑题就顺着聊一两句再拉回来；用户想结束就自然收尾。
 - 每条消息一般不超过100字，像群聊消息，不列清单不用markdown标题。
 - 如果这一轮你确实没什么可说的（比如别人刚说的已经很完整），就只回复：[跳过]
-- 默认用中文；材料里其他语言（西语/英语等）的术语保留原语言。`;
+- 默认用中文；材料里其他语言（西语/英语等）的术语保留原语言。${notionBlock(notionEnabled)}`;
 }
 
 export const GROUP_OPENING_FIRST = '（系统：复习开始。你先开场：轻松聊一两句，自然引入第一个知识点。）';

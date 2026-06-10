@@ -15,13 +15,16 @@ import {
 import {
     ROOMS, digestSession, retrieveMemories, formatMemories, testEmbed, isEmbedConfigured,
 } from './memory.js';
+import {
+    isNotionConfigured, createNotePage, testNotion, extractNotionDirectives,
+} from './notion.js';
 
 const $ = (id) => document.getElementById(id);
 
 const state = {
     subjects: [],
     currentSubjectId: null,
-    settings: { api1: null, api2: null, github: null, embed: null },
+    settings: { api1: null, api2: null, github: null, embed: null, notion: null },
     modelLists: { 1: [], 2: [] }, // 各接口拉取到的模型列表
     characters: [],               // 可拉进群聊的 AI 角色
     editingCharId: null,
@@ -61,6 +64,7 @@ async function loadSettings() {
     state.settings.api2 = await db.getSetting('api2');
     state.settings.github = await db.getSetting('github');
     state.settings.embed = await db.getSetting('embed');
+    state.settings.notion = await db.getSetting('notion');
     state.modelLists[1] = (await db.getSetting('modelList1')) || [];
     state.modelLists[2] = (await db.getSetting('modelList2')) || [];
 }
@@ -118,6 +122,10 @@ function fillSettingsForm() {
     $('embedBaseUrl').value = (embed && embed.baseUrl) || '';
     $('embedKey').value = (embed && embed.apiKey) || '';
     $('embedModel').value = (embed && embed.model) || '';
+    const notion = state.settings.notion;
+    $('notionToken').value = (notion && notion.token) || '';
+    $('notionParent').value = (notion && notion.parent) || '';
+    $('notionAutoRecap').checked = !notion || notion.autoRecap !== false;
     $('ghToken').value = (github && github.token) || '';
     $('ghRepo').value = (github && github.repo) || '';
     $('ghUseProxy').checked = !github || github.useProxy !== false;
@@ -143,6 +151,11 @@ function readSettingsForm() {
             apiKey: $('embedKey').value.trim(),
             model: $('embedModel').value.trim(),
         },
+        notion: {
+            token: $('notionToken').value.trim(),
+            parent: $('notionParent').value.trim(),
+            autoRecap: $('notionAutoRecap').checked,
+        },
         github: {
             token: $('ghToken').value.trim(),
             repo: $('ghRepo').value.trim() || 'estudio-backup',
@@ -157,6 +170,7 @@ async function saveSettings() {
     await db.setSetting('api1', s.api1);
     await db.setSetting('api2', s.api2);
     await db.setSetting('embed', s.embed);
+    await db.setSetting('notion', s.notion);
     await db.setSetting('github', s.github);
     state.settings = s;
     toast('设置已保存', 'ok');
@@ -469,7 +483,7 @@ async function startReview() {
         subject: sub,
         points: picked,
         apiMessages: [
-            { role: 'system', content: buildSystemPrompt(sub, picked, last && last.summary, formatMemories(memories)) },
+            { role: 'system', content: buildSystemPrompt(sub, picked, last && last.summary, formatMemories(memories), !!notionCfg()) },
             { role: 'user', content: OPENING_TRIGGER },
         ],
         touched: {},        // pointId → { title, before, after }
@@ -488,13 +502,70 @@ async function startReview() {
     try {
         const { text, usedApi } = await chatWithFallback(api1, api2, state.session.apiMessages);
         typing.remove();
-        state.session.apiMessages.push({ role: 'assistant', content: text });
-        addMsg('ai', text);
+        const { clean, jobs } = extractNotionDirectives(text);
+        state.session.apiMessages.push({ role: 'assistant', content: clean || text });
+        addMsg('ai', clean || text);
+        runNotionJobs(jobs);
         $('chatApiBadge').textContent = `接口${usedApi}`;
         $('chatInput').focus();
     } catch (e) {
         typing.remove();
         addMsg('sys', '开场失败：' + e.message + '（检查设置里的 API 配置后重试）');
+    }
+}
+
+// ================= Notion 笔记 =================
+
+function notionCfg() {
+    const n = state.settings.notion;
+    return isNotionConfigured(n) ? n : null;
+}
+
+/** 执行 AI 回复里摘出的写笔记指令（不阻塞聊天） */
+async function runNotionJobs(jobs) {
+    const cfg = notionCfg();
+    if (!cfg || !jobs.length) return;
+    for (const job of jobs) {
+        try {
+            await createNotePage(cfg, job.title, job.md);
+            addMsg('sys', `📝 已写进 Notion：${job.title}`);
+        } catch (e) {
+            console.error(e);
+            addMsg('sys', `Notion 写入失败：${e.message}`);
+        }
+    }
+}
+
+const RECAP_PROMPT_HEAD = `把下面这次复习对话整理成一篇「今日复盘」笔记，markdown 格式，结构：
+## 今天复习了什么
+## 掌握得不错
+## 还要再看
+## 下次计划
+要求：简洁具体，每节 1~4 条；保留材料原语言的术语；基于对话真实内容，不要脑补；只输出 markdown，不要其他文字。
+
+对话记录：
+`;
+
+/** 复习结束后自动把"今日复盘"写到 Notion（失败只提示，不影响主流程） */
+async function writeNotionRecap(sess, visible) {
+    const cfg = notionCfg();
+    if (!cfg || cfg.autoRecap === false) return;
+    try {
+        const transcript = visible
+            .map(m => `${m.name || (m.role === 'user' ? '用户' : 'AI')}: ${m.content}`)
+            .join('\n').slice(0, 12000);
+        if (transcript.length < 50) return;
+        const { api1, api2 } = state.settings;
+        const md = await chatForJudge(api1, api2, [
+            { role: 'user', content: RECAP_PROMPT_HEAD + transcript },
+        ], { maxTokens: 2000, timeoutMs: 90000 });
+        const d = new Date(sess.startedAt);
+        const title = `${d.getMonth() + 1}月${d.getDate()}日 ${sess.subject.name} 复盘`;
+        await createNotePage(cfg, title, md.replace(/^```(?:markdown)?\s*\n?|```\s*$/g, ''), '📅');
+        toast(`「${title}」已写进 Notion 📅`, 'ok');
+    } catch (e) {
+        console.error(e);
+        toast('Notion 复盘写入失败：' + e.message, 'err');
     }
 }
 
@@ -638,7 +709,7 @@ function charApis(char) {
 function groupMessagesFor(sess, char, extraTrigger) {
     const msgs = [{
         role: 'system',
-        content: buildGroupSystemPrompt(sess.subject, sess.points, sess.lastSummary, char, sess.chars, sess.memoriesText),
+        content: buildGroupSystemPrompt(sess.subject, sess.points, sess.lastSummary, char, sess.chars, sess.memoriesText, !!notionCfg()),
     }];
     let buf = [];
     for (const m of sess.history) {
@@ -674,9 +745,12 @@ async function personaReply(sess, char, trigger) {
         typing.remove();
         if (state.session !== sess) return null; // 用户已经退出了
         if (/^\s*[\[（(]?\s*跳过\s*[\]）)]?\s*$/.test(text)) return null;
-        sess.history.push({ speaker: char.id, content: text });
-        addMsg(styleClass, text, label);
-        return text;
+        const { clean, jobs } = extractNotionDirectives(text);
+        runNotionJobs(jobs);
+        if (!clean) return null; // 整条消息都是写笔记指令
+        sess.history.push({ speaker: char.id, content: clean });
+        addMsg(styleClass, clean, label);
+        return clean;
     } catch (e) {
         typing.remove();
         if (state.session === sess) addMsg('sys', `${char.name} 掉线了：${e.message}`);
@@ -770,8 +844,10 @@ async function sendMessage() {
         const { api1, api2 } = state.settings;
         const { text: reply, usedApi } = await chatWithFallback(api1, api2, sess.apiMessages);
         typing.remove();
-        sess.apiMessages.push({ role: 'assistant', content: reply });
-        addMsg('ai', reply);
+        const { clean, jobs } = extractNotionDirectives(reply);
+        sess.apiMessages.push({ role: 'assistant', content: clean || reply });
+        addMsg('ai', clean || reply);
+        runNotionJobs(jobs);
         $('chatApiBadge').textContent = `接口${usedApi}`;
     } catch (e) {
         typing.remove();
@@ -879,6 +955,9 @@ async function endSession(silent = false) {
                 if (state.currentSubjectId === sess.subject.id) renderSubjectView();
             }
         });
+
+        // 今日复盘写到 Notion（配置了才会动）
+        writeNotionRecap(sess, visible);
 
         // 自动备份
         const gh = state.settings.github;
@@ -1000,6 +1079,20 @@ function bindEvents() {
             btn.disabled = false; btn.textContent = '测试向量接口';
         }
     };
+    $('btnTestNotion').onclick = async () => {
+        const s = readSettingsForm();
+        if (!isNotionConfigured(s.notion)) { toast('Token 和父页面链接都要填', 'err'); return; }
+        const btn = $('btnTestNotion');
+        btn.disabled = true; btn.textContent = '测试中…';
+        try {
+            await testNotion(s.notion);
+            toast('Notion 连接正常 ✓', 'ok');
+        } catch (e) {
+            toast('Notion 不通：' + e.message + '（检查 Token，以及父页面是否已连接你的 integration）', 'err');
+        } finally {
+            btn.disabled = false; btn.textContent = '测试 Notion';
+        }
+    };
     $('btnFetchModels1').onclick = () => fetchModelsSlot(1);
     $('btnFetchModels2').onclick = () => fetchModelsSlot(2);
     $('api1ModelSelect').onchange = (e) => { if (e.target.value) $('api1Model').value = e.target.value; };
@@ -1040,6 +1133,7 @@ async function saveSettingsQuiet() {
     await db.setSetting('api1', s.api1);
     await db.setSetting('api2', s.api2);
     await db.setSetting('embed', s.embed);
+    await db.setSetting('notion', s.notion);
     await db.setSetting('github', s.github);
     state.settings = s;
 }
