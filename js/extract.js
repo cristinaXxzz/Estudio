@@ -90,9 +90,72 @@ async function htmlToText(file) {
     return text;
 }
 
-/** 把 File 对象读成纯文本 */
-export async function fileToText(file) {
+// ---------- AI 认字（视觉 OCR）：手写/扫描 PDF 和图片走这条路 ----------
+// GoodNotes 等手写笔记导出的 PDF 没有文字层，把每页渲染成图片，
+// 发给用户自己的 AI 接口（需要模型支持看图，如 gpt-4o / claude / gemini）。
+
+const OCR_MAX_PAGES = 30;       // 防止超大 PDF 跑爆账单
+const OCR_RENDER_WIDTH = 1400;  // 渲染宽度：够认字，又不至于图太大
+
+const OCR_PROMPT = '把这张笔记/资料图片里的全部文字内容转写出来。保留原语言（中文/西班牙语/英语等都原样保留），公式用普通文本写，表格用文字描述。只输出转写内容，不要评论。如果整页没有文字，输出：[空白页]';
+
+async function pageToDataUrl(page) {
+    const viewport1 = page.getViewport({ scale: 1 });
+    const scale = Math.min(2.5, OCR_RENDER_WIDTH / viewport1.width);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+async function visionOcr(cfg, dataUrl) {
+    const reply = await chatOnce(cfg, [{
+        role: 'user',
+        content: [
+            { type: 'text', text: OCR_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+    }], { temperature: 0.1, maxTokens: 4000, timeoutMs: 180000 });
+    return reply.trim() === '[空白页]' ? '' : reply;
+}
+
+/** 一批图片并行认字（两个 API 一起干活） */
+async function ocrImages(ocrCtx, dataUrls) {
+    const tasks = dataUrls.map(url => (cfg) => visionOcr(cfg, url));
+    const { results, errors } = await runTasksDualApi(
+        ocrCtx.api1, ocrCtx.api2, tasks,
+        (done, total) => ocrCtx.onProgress && ocrCtx.onProgress('ocr', done, total),
+    );
+    const okPages = results.filter(t => typeof t === 'string');
+    if (!okPages.some(t => t.trim())) {
+        throw new Error('AI 没认出任何文字。可能你的模型不支持看图，换一个支持图片的模型（如 gpt-4o / gemini / claude 系列）再试');
+    }
+    if (errors.length) console.warn(`[OCR] ${errors.length} 页识别失败`, errors[0]);
+    return results.map((t, i) => (t && t.trim()) ? `【第${i + 1}页】\n${t.trim()}` : '').filter(Boolean).join('\n\n');
+}
+
+/**
+ * 把 File 对象读成纯文本。
+ * ocrCtx 可选：{ api1, api2, onProgress } —— 提供时，没有文字层的
+ * PDF 和图片文件会走"AI 认字"。
+ */
+export async function fileToText(file, ocrCtx) {
     const name = file.name.toLowerCase();
+    if (/\.(png|jpe?g|webp|gif|bmp)$/.test(name)) {
+        if (!ocrCtx) throw new Error('图片需要 AI 认字，但没配置接口');
+        const dataUrl = await new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = () => reject(new Error('图片读取失败'));
+            r.readAsDataURL(file);
+        });
+        return ocrImages(ocrCtx, [dataUrl]);
+    }
     if (name.endsWith('.pdf')) {
         const pdfjs = await loadPdfjs();
         const buf = await file.arrayBuffer();
@@ -104,8 +167,21 @@ export async function fileToText(file) {
             parts.push(content.items.map(it => it.str).join(' '));
         }
         const text = parts.join('\n\n');
-        if (!text.trim()) throw new Error('这个 PDF 里没有可提取的文字（可能是扫描件/图片版）');
-        return text;
+        // 文字层够丰富就直接用；太稀薄（手写/扫描版）就转 AI 认字
+        const avgPerPage = text.replace(/\s/g, '').length / doc.numPages;
+        if (text.trim() && avgPerPage >= 30) return text;
+        if (!ocrCtx) throw new Error('这个 PDF 里没有可提取的文字（可能是手写/扫描版）');
+        const pageCount = Math.min(doc.numPages, OCR_MAX_PAGES);
+        const dataUrls = [];
+        for (let i = 1; i <= pageCount; i++) {
+            if (ocrCtx.onProgress) ocrCtx.onProgress('render', i, pageCount);
+            dataUrls.push(await pageToDataUrl(await doc.getPage(i)));
+        }
+        let ocrText = await ocrImages(ocrCtx, dataUrls);
+        if (doc.numPages > OCR_MAX_PAGES) {
+            ocrText += `\n\n（注：这个 PDF 共 ${doc.numPages} 页，AI 认字只处理了前 ${OCR_MAX_PAGES} 页）`;
+        }
+        return ocrText;
     }
     if (name.endsWith('.docx')) {
         const mammoth = await loadScript(MAMMOTH_URL, 'mammoth');

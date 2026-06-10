@@ -383,7 +383,16 @@ async function handleFiles(fileList) {
         fill.style.width = '0%';
         txt.textContent = `正在读取 ${file.name}…`;
         try {
-            const text = await fileToText(file);
+            const text = await fileToText(file, {
+                api1, api2,
+                onProgress: (phase, done, total) => {
+                    fill.style.width = Math.round(done / total * 100) + '%';
+                    txt.textContent = phase === 'render'
+                        ? `正在把 ${file.name} 的页面变成图片…（${done}/${total}）`
+                        : `AI 正在认字 ${file.name}…（${done}/${total} 页）`;
+                },
+            });
+            fill.style.width = '0%';
             txt.textContent = `AI 正在拆解 ${file.name}…`;
             const { points, failedChunks } = await extractPoints(api1, api2, text, (done, total) => {
                 fill.style.width = Math.round(done / total * 100) + '%';

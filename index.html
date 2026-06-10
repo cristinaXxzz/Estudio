@@ -66,10 +66,10 @@
           <h2>资料</h2>
           <label class="mini-btn file-label">
             ＋ 上传文件
-            <input type="file" id="fileInput" multiple accept=".txt,.md,.markdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.html,.htm" hidden>
+            <input type="file" id="fileInput" multiple accept=".txt,.md,.markdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.html,.htm,.png,.jpg,.jpeg,.webp" hidden>
           </label>
         </div>
-        <p class="hint">支持 txt / md / pdf / docx / pptx / xlsx / csv / html。上传后 AI 会自动把内容拆成知识点。</p>
+        <p class="hint">支持 txt / md / pdf / docx / pptx / xlsx / csv / html / 图片。手写笔记（如 GoodNotes 导出的 PDF）和拍照图片会让 AI 帮你认字——需要你的模型支持看图。上传后 AI 自动拆成知识点。</p>
         <div id="extractProgress" class="progress-row" hidden>
           <div class="progress-bar"><div id="extractProgressFill" class="progress-fill"></div></div>
           <span id="extractProgressText"></span>
